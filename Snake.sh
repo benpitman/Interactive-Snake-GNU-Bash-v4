@@ -7,34 +7,26 @@ exit
 
 extrap() {
     rm /tmp/snake
+    tput cvvis
+    stty echo
 }
+trap extrap EXIT
 
-show_grid() {
-    printf '%-28s%s\n' "$time_taken" "Score: $score"
-    echo -e '+-------------------------------------+'
-    for row in {1..18}; do
-        # If snake is not on this row, print an empty row to save time
-        if (( $ref_row!=$row && $food_row!=$row )) && ! [[ " ${tail_row[@]} " =~ " $row " ]]; then
-            echo '|                                     |'
-            continue
-        fi
-        echo -n '|'
-        for col in {1..37}; do
-            # Print "X" on current position
-            if (( $ref_col==$col && $ref_row==$row )); then
-                echo -n "o"
-                continue
-            fi
-            if (( $food_col==$col && $food_row==$row )); then
-                echo -n "@"
-                continue
-            fi
-            # Print "x" or " " depending on tail position
-            echo -n "${tail[$col,$row]}"
-        done
-        echo '|'
+show_map() {
+    for (( p=0; p<${#tail_row[@]}; p++ )); do
+        tput cup ${tail_row[$p]} $(( ${tail_col[$p]}+1 ))
+        echo -e '\bx'
     done
-    echo -n '+-------------------------------------+'
+    if [ -n "$rem_row" ]; then
+        tput cup $rem_row $(( $rem_col+1 ))
+        echo -e '\b '
+    fi
+    tput cup $food_row $(( $food_col+1 ))
+    echo -e '\b@'
+    tput cup $ref_row $(( $ref_col+1 ))
+    echo -e '\bo'
+    tput cup 21 0
+    printf '%-28s%s' "$time_taken" "Score: $score"
 }
 
 get_time() {
@@ -46,15 +38,14 @@ get_time() {
 
 add_food() {
     # Populate food position based off snake position
-    food_col=$(( $RANDOM%36+1 ))
-    until (( $food_col%2==0 && $food_col!=$ref_col )); do
+    while true; do
         food_col=$(( $RANDOM%36+1 ))
-    done
-    food_row=$(( $RANDOM%18+1 ))
-    until (( $food_row!=$ref_row )); do
+        (( $food_col&1 )) && continue
         food_row=$(( $RANDOM%18+1 ))
+        (( $food_col==$ref_col && $food_row==$ref_row)) && continue
+        (( ${tail[$food_col,$food_row]} )) && continue
+        break
     done
-    [[ "${tail[$food_col,$food_row]}" != " " ]] && add_food
 }
 
 navigate() {
@@ -63,25 +54,21 @@ navigate() {
     # Current position
     ref_col=20
     ref_row=10
+    tail_len=3
     direction=$(( $RANDOM%4 ))
-    tail_len=4
-    add_food
     score=0
+    add_food
+    tput reset
     stty -echo
+    tput civis
+    echo -e '+-------------------------------------+'
+    for (( b=1; b<19; b++ )); do
+        echo '|                                     |'
+    done
+    echo -e '+-------------------------------------+'
     while true; do
-        # Add current position to the first tail position
-        tail_col+=( $ref_col )
-        tail_row+=( $ref_row )
-        tail[$ref_col,$ref_row]='x'
-        # If the tail reaches the length clear the last from the tail
-        if (( ${#tail_col[@]}>$tail_len )); then
-            tail[${tail_col[@]:0:1},${tail_row[@]:0:1}]=' '
-            tail_col=( ${tail_col[@]:1} )
-            tail_row=( ${tail_row[@]:1} )
-        fi
-        tput reset
         get_time
-        show_grid
+        show_map
         pre_time=$( date '+%1N' )
         # Arrow keys are three characters long
         read -sn1 -t 0.$speed key1
@@ -94,6 +81,19 @@ navigate() {
             (( $post_time<$pre_time )) && (( post_time+=10 ))
             sleep 0.$(( $speed-($post_time-$pre_time) ))
             read -t 0.0001 -n 10000 discard
+        fi
+
+        # Add current position to the first tail position
+        tail_col+=( $ref_col )
+        tail_row+=( $ref_row )
+        tail[$ref_col,$ref_row]=1
+        # If the tail reaches the length clear the last from the tail
+        if (( ${#tail_col[@]}>$tail_len )); then
+            rem_col=${tail_col[@]:0:1}
+            rem_row=${tail_row[@]:0:1}
+            tail[${tail_col[@]:0:1},${tail_row[@]:0:1}]=0
+            tail_col=( ${tail_col[@]:1} )
+            tail_row=( ${tail_row[@]:1} )
         fi
 
         # Change direction of snake depending on arrow key
@@ -113,10 +113,16 @@ navigate() {
         esac
 
         # Checks if next move makes the snake head collide with walls or itself
-        # TODO
-        (( $ref_col==0 || $ref_col==38 )) && exit
-        (( $ref_row==0 || $ref_row==19 )) && exit
-        [[ "${tail[$ref_col,$ref_row]}" == "x" ]] && exit
+        if (( $cheating )); then
+            (( $ref_col==0 )) && ref_col=36
+            (( $ref_col==38 )) && ref_col=2
+            (( $ref_row==0 )) && ref_row=18
+            (( $ref_row==19 )) && ref_row=1
+        else
+            (( $ref_col==0 || $ref_col==38 )) && exit
+            (( $ref_row==0 || $ref_row==19 )) && exit
+            (( ${tail[$ref_col,$ref_row]} )) && exit
+        fi
 
         # Checks if next move makes the snake head collide with food
         if (( $food_col==$ref_col && $food_row==$ref_row )); then
@@ -205,6 +211,7 @@ set_difficulty() {
     else
         speed=$1
     fi
+    (( $cheating )) && increment=0
     navigate
 }
 
@@ -220,8 +227,10 @@ show_help() {
 main_menu() {
     # Display the main menu
     selected=1
+    cheating=0
     while true; do
         tput reset
+        (( $cheating )) && CHEAT='\e[1mCHEAT  MODE\e[0m' || CHEAT='           '
         case $selected in
             1)  START='\e[1;36mSTART\e[0m'
                 QUIT='QUIT';;
@@ -239,7 +248,7 @@ main_menu() {
             \r$(show_help)
             \r|                                     |
             \r|                                     |
-            \r|                                     |
+            \r|             $CHEAT             |
             \r|                                     |
             \r|           $START      $QUIT           |
             \r|                                     |
@@ -249,6 +258,7 @@ main_menu() {
         read -sn1 -t 0.0001 key3
         # Bit-switches selected item between 0 and 1
         [[ "$key3" == [CD] ]] && (( selected^=1 ))
+        [[ "$key2" == O && "$key3" == F ]] && (( cheating^=1 ))
         if [ -z "$key1" ]; then
             (( $selected )) && set_difficulty || exit
         fi
@@ -259,7 +269,7 @@ main_menu() {
 populate() {
     for row in {1..18}; do
         for col in {1..37}; do
-            tail[$col,$row]=" "
+            tail[$col,$row]=0
         done
     done
 }
