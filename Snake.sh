@@ -3,24 +3,24 @@
 if [ -z "$1" ] || [[ "$1" != "-t" ]]; then
     # Creates a copy of the script to tmp for it to be executed in a new terminal
     sed -n '10,$p' $0 >| /tmp/snake
-    gnome-terminal --title "Snake" --geometry 39x21+800+350 -e 'bash /tmp/snake' 2>/dev/null
+    gnome-terminal --title "Snake" --geometry 39x21+800+350 -e "bash /tmp/snake" 2>/dev/null
     exit
 fi
 
 cleanup() {
-    rm /tmp/snake 2>/dev/null
+    tput clear
     tput cvvis
     stty echo
+    rm /tmp/snake 2>/dev/null
 }
 trap cleanup EXIT
 
 quit_game() {
     clear_map 19
-    printf '\n%-28s%s' "$time_taken" "Score: $score"
-    tput cup 5 26
-    echo -e "\b\b\b\b\b\b\b\b\b\b\b\b\e[1mAre You Sure\e[0m"
-    tput cup 7 28
-    echo -e "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\e[1mYou Want To Quit?\e[0m"
+    tput cup 5 14
+    echo -e "Are You Sure"
+    tput cup 7 11
+    echo -e "You Want To Quit?"
     selected=0
     tput civis  # Disable cursor
     while true; do
@@ -30,8 +30,8 @@ quit_game() {
             1)  YES='\e[1;36mYES\e[0m'
                 NO='NO';;
         esac
-        tput cup 13 25
-        echo -e "\b\b\b\b\b\b\b\b\b\b\b$NO      $YES"
+        tput cup 13 14
+        echo -e "$NO      $YES"
         read -sn1 key1
         read -sn1 -t 0.0001 key2
         read -sn1 -t 0.0001 key3
@@ -43,17 +43,49 @@ quit_game() {
     clear_map 19
 }
 
+score_screen() {
+    # Draw end-screen menu
+    clear_map 19
+    tput cup 5 14
+    echo -e "You Crashed"
+    if (( $score>$high_score )); then
+        tput cup 8 12
+        echo -e "\e[1mNew High Score!\e[0m"
+    fi
+    tput cup 11 7
+    echo -e "\e[1mWould You Like To Restart?\e[0m"
+    selected=0
+    tput civis
+    while true; do
+        case $selected in
+            0)  YES='\e[1;36mYES\e[0m'
+                NO='NO';;
+            1)  NO='\e[1;36mNO\e[0m'
+                YES='YES';;
+        esac
+        tput cup 13 14
+        echo -e "$YES      $NO"
+        read -sn1 key1
+        read -sn1 -t 0.0001 key2
+        read -sn1 -t 0.0001 key3
+        [[ "$key3" == [CD] ]] && (( selected^=1 ))
+        [ -z "$key1" ] && break
+        unset key1 key2 key3
+    done
+    (( $selected )) && exit || new_game
+}
+
 pause() {
     # Draw pause splash
-    tput cup 9 23
-    echo -e "\b\b\b\b\b\b\b       "
-    tput cup 10 23
-    echo -e "\b\b\b\b\b\b\b PAUSE "
-    tput cup 11 23
-    echo -e "\b\b\b\b\b\b\b       "
+    tput cup 9 16
+    echo -e "       "
+    tput cup 10 16
+    echo -e " PAUSE "
+    tput cup 11 16
+    echo -e "       "
     read -sn1
-    tput cup 10 23
-    echo -e "\b\b\b\b\b\b\b       "
+    tput cup 10 17
+    echo -e "     "
 }
 
 draw_map() {
@@ -62,33 +94,29 @@ draw_map() {
         # If redraw is set, draw full tail with every movement
         if (( $redraw )); then
             for (( link=0; link<${#tail_row[@]}; link++ )); do
-                tput cup ${tail_row[$link]} $(( ${tail_col[$link]}+1 ))
-                echo -e '\bx'
+                tput cup ${tail_row[$link]} ${tail_col[$link]}
+                echo 'x'
             done
         # Else draw only the latest
         else
-            tput cup ${tail_row[-1]} $(( ${tail_col[-1]}+1 ))
-            echo -e '\bx'
+            tput cup ${tail_row[-1]} ${tail_col[-1]}
+            echo 'x'
         fi
     fi
     # Delete last tail link when the full length is visible
     if [ -n "$rem_row" ]; then
-        tput cup $rem_row $(( $rem_col+1 ))
-        echo -e '\b '
+        tput cup $rem_row $rem_col
+        echo ' '
     fi
     # Draw snake head
-    tput cup $ref_row $(( $ref_col+1 ))
-    echo -e '\bo'
+    tput cup $ref_row $ref_col
+    echo 'o'
     # Draw food
-    tput cup $food_row $(( $food_col+1 ))
-    echo -e '\b@'
-
-    # Calculate current time taken
-    time_taken_s=$(( $( date '+%s' )-$start_time ))
-    time_taken=$( printf 'Time Taken: %02dh:%02dm:%02ds' \
-            $(( $time_taken_s/3600 )) $(( $time_taken_s%3600/60 )) $(( $time_taken_s%60 )) )
-    tput cup 21 0
-    printf '%-28s%s' "$time_taken" "Score: $score"
+    tput cup $food_row $food_col
+    echo '@'
+    # Draw stats
+    tput cup 20 0
+    printf '| %-21s%-15s|' "High Score: $high_score" "Score: $score"
 }
 
 add_food() {
@@ -98,23 +126,13 @@ add_food() {
         (( $food_col&1 )) && continue
         food_row=$(( $RANDOM%18+1 ))
         (( $food_col==$ref_col && $food_row==$ref_row)) && continue
+        # Pre-populating Tail array is useful here
         (( ${tail[$food_col,$food_row]} )) && continue
         break
     done
 }
 
 navigate() {
-    # Save epoch for timer
-    [ -z "$start_time" ] && start_time=$( date '+%s' )
-    # Current position
-    ref_col=20
-    ref_row=10
-    tail_len=3
-    direction=$(( $RANDOM%4 ))
-    score=0
-    redraw=0
-    add_food
-    clear_map 19
     while true; do
         draw_map
         redraw=$cheating
@@ -127,12 +145,9 @@ navigate() {
 
         if (( $read_pid!=142 )); then
             # Checks key pressed for sub menus
-            if [[ "$key1" == [pq] ]]; then
-                pause_time_start=$( date '+%s' )
-                [[ "$key1" == p ]] && pause
-                [[ "$key1" == q ]] && quit_game
-                pause_time_finish=$( date '+%s' )
-                (( start_time+=$(( $pause_time_finish-$pause_time_start )) ))
+            if [[ "$key1" == [pPqQ] ]]; then
+                [[ "$key1" == [pP] ]] && pause
+                [[ "$key1" == [qQ] ]] && quit_game
                 redraw=1
                 continue
             fi
@@ -179,10 +194,10 @@ navigate() {
             (( $ref_col==38 )) && ref_col=2
             (( $ref_row==0 )) && ref_row=18
             (( $ref_row==19 )) && ref_row=1
-        else
-            (( $ref_col==0 || $ref_col==38 )) && exit
-            (( $ref_row==0 || $ref_row==19 )) && exit
-            (( ${tail[$ref_col,$ref_row]} )) && exit
+        elif (( $ref_col==0 || $ref_col==38 )) || \
+                (( $ref_row==0 || $ref_row==19 )) || \
+                (( ${tail[$ref_col,$ref_row]} )); then
+            score_screen
         fi
 
         # Checks if next move makes the snake head collide with food
@@ -190,6 +205,7 @@ navigate() {
             add_food
             (( tail_len++ ))
             (( score+=$increment ))
+            (( $score>$high_score )) && echo "$score" >| $hs_log
         fi
 
         unset key1 key2 key3
@@ -204,52 +220,71 @@ clear_map() {
         echo '|                                     |'
     done
     echo -en '+-------------------------------------+'
+    (( $1==19 )) && printf '\n| %-21s%-15s|' "High Score: $high_score" "Score: $score"
     tput civis
+}
+
+new_game() {
+    declare -A tail
+    # Populating empty tail array saves on logic when printing
+    for y_x in {1..18},{1..37}; do
+        tail[$y_x]=0
+    done
+    # Current position
+    ref_col=20
+    ref_row=10
+    # Tail length and positions
+    tail_len=3
+    tail_col=()
+    tail_row=()
+    direction=$(( $RANDOM%4 ))
+    score=0
+    high_score=$( < $hs_log )
+    redraw=0
+    add_food
+    clear_map 19
+    navigate
 }
 
 set_difficulty() {
     clear_map 20
-    tput cup 3 28
-    echo -e "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\e[1mChoose Difficulty\e[0m"
+    tput cup 3 11
+    echo -e "\e[1mChoose Difficulty\e[0m"
     selected=2
     while true; do
         case $selected in
+            *)  unset VERY_SLOW SLOW NORMAL FAST VERY_FAST;;&
             4)  VERY_SLOW='\e[1;36mVERY  SLOW\e[0m'
                 speed=5
-                increment=1
-                unset SLOW NORMAL FAST VERY_FAST;;
+                increment=1;;
             3)  SLOW='\e[1;36mSLOW\e[0m'
                 speed=4
-                increment=2
-                unset VERY_SLOW NORMAL FAST VERY_FAST;;
+                increment=2;;
             2)  NORMAL='\e[1;36mNORMAL\e[0m'
                 speed=3
-                increment=3
-                unset VERY_SLOW SLOW FAST VERY_FAST;;
+                increment=3;;
             1)  FAST='\e[1;36mFAST\e[0m'
                 speed=2
-                increment=4
-                unset VERY_SLOW SLOW NORMAL VERY_FAST;;
+                increment=4;;
             0)  VERY_FAST='\e[1;36mVERY  FAST\e[0m'
                 speed=1
-                increment=5
-                unset VERY_SLOW SLOW NORMAL FAST;;
+                increment=5;;
         esac
         set ${VERY_SLOW:='VERY  SLOW'} \
             ${SLOW:='SLOW'} \
             ${NORMAL:='NORMAL'} \
             ${FAST:='FAST'} \
             ${VERY_FAST:='VERY  FAST'}
-        tput cup 8 24
-        echo -e "\b\b\b\b\b\b\b\b\b\b$VERY_SLOW"
-        tput cup 10 22
-        echo -e "\b\b\b\b\b$SLOW"
-        tput cup 12 23
-        echo -e "\b\b\b\b\b\b\b$NORMAL"
-        tput cup 14 22
-        echo -e "\b\b\b\b\b$FAST"
-        tput cup 16 24
-        echo -en "\b\b\b\b\b\b\b\b\b\b$VERY_FAST"
+        tput cup 8 14
+        echo -e "$VERY_SLOW"
+        tput cup 10 17
+        echo -e "$SLOW"
+        tput cup 12 16
+        echo -e "$NORMAL"
+        tput cup 14 17
+        echo -e "$FAST"
+        tput cup 16 14
+        echo -en "$VERY_FAST"
         read -sn1 key1
         read -sn1 -t 0.0001 key2
         read -sn1 -t 0.0001 key3
@@ -261,10 +296,12 @@ set_difficulty() {
         unset key1 key2 key3
     done
     (( $cheating )) && increment=0
-    navigate
+    new_game
 }
 
 main_menu() {
+    # Clear screen
+    tput clear
     # Display the main menu
     echo -en "+-------------------------------------+
         \r|                                     |
@@ -289,46 +326,55 @@ main_menu() {
         \r+-------------------------------------+"
     selected=1
     cheating=0
+    # Get/Create current high score
+    hs_log=/home/$USER/.snake_highscore
+    [ -s "$hs_log" ] || echo "0" >| $hs_log
+    high_score=$( < $hs_log )
     tput civis  # Disable cursor blinker
     while true; do
         case $selected in
             1)  START='\e[1;36mSTART\e[0m'
-                QUIT='QUIT';;
-            0)  START='START'
-                QUIT='\e[1;36mQUIT\e[0m';;
+                unset QUIT CL_HS;;
+            0)  QUIT='\e[1;36mQUIT\e[0m'
+                unset CL_HS START;;
+            -1) CL_HS='\e[1;36mCLEAR HIGHSCORE\e[0m'
+                unset START QUIT;;
         esac
+        set ${START:='START'} \
+            ${QUIT:='QUIT'} \
+            ${CL_HS:='CLEAR HIGHSCORE'}
         # Control posision of the cursor
-        tput cup 16 25
+        tput cup 15 14
         if (( $cheating )); then
-            echo -e '\b\b\b\b\b\b\b\b\b\b\b\e[1mCHEAT  MODE\e[0m'
+            echo -e '\e[1mCHEAT  MODE\e[0m'
         else
-            echo -e '\b\b\b\b\b\b\b\b\b\b\b           '
+            echo -e '           '
         fi
-        tput cup 18 27
-        echo -e "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b$START      $QUIT"
+        tput cup 17 12
+        echo -e "$START      $QUIT"
+        tput cup 19 12
+        echo -e "$CL_HS"
         read -sn1 key1
         read -sn1 -t 0.0001 key2
         read -sn1 -t 0.0001 key3
         # Bit-switches selected item between 0 and 1
         [[ "$key3" == [CD] ]] && (( selected^=1 ))
+        ( (( $high_score>0 )) && [[ "$key3" == [AB] ]] ) && selected=$(( selected==-1 ? 1 : -1 ))
         [[ "$key2" == O && "$key3" == F ]] && (( cheating^=1 ))
         if [ -z "$key1" ]; then
-            (( $selected )) && set_difficulty || exit
+            if (( $selected==-1 )); then
+                echo "0" >| $hs_log
+                high_score=0
+                selected=1
+            elif (( $selected )); then
+                set_difficulty
+            else
+                exit
+            fi
         fi
         unset key1 key2 key3
     done
 }
 
-populate() {
-    for row in {1..18}; do
-        for col in {1..37}; do
-            tail[$col,$row]=0
-        done
-    done
-}
-
 stty -echo  #Disable echoing
-declare -A tail
-# Populating empty tail array saves on logic when printing
-populate
 main_menu
